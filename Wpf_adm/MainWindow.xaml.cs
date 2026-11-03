@@ -10,6 +10,11 @@ using smartgate_wpf_adm.Services;
 using System.Windows.Threading;
 using System.IO;
 using System.Text.Json;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Collections.ObjectModel;
+using System.Threading;
 
 
 namespace smartgate_wpf_adm
@@ -19,6 +24,8 @@ namespace smartgate_wpf_adm
         private readonly SerialTransport _serialTransport = new();
         private readonly TcpTransport _tcpTransport = new();
         private readonly List<string> _settingsResponseLines = new();
+        private readonly ObservableCollection<DiscoveredSmartGate> _discoveredGates = new();
+        private bool _isSearchingForGates;
 
         private GateSettings? _loadedSettings;
         private bool _isReadingSettings;
@@ -32,6 +39,7 @@ namespace smartgate_wpf_adm
         public MainWindow()
         {
             InitializeComponent();
+            DiscoveredGatesGrid.ItemsSource = _discoveredGates;
 
             LoadAppConfig();
 
@@ -246,6 +254,149 @@ namespace smartgate_wpf_adm
             }
         }
 
+
+        private async void FindGate_Click(object sender, RoutedEventArgs e)
+        {
+            if (_tcpTransport.IsConnected || _isSearchingForGates)
+                return;
+
+            _isSearchingForGates = true;
+            btnFindGate.IsEnabled = false;
+
+            _discoveredGates.Clear();
+
+            DiscoveryStatusText.Text = "Söker efter SmartGate...";
+            AppendLog("Startar UDP-sökning efter SmartGate.");
+
+            const int discoveryPort = 4243;
+            const string discoveryMessage = "SMARTGATE_DISCOVER_V1";
+
+            try
+            {
+                using var udp = new UdpClient(0);
+                udp.EnableBroadcast = true;
+
+                byte[] request = Encoding.UTF8.GetBytes(discoveryMessage);
+
+                await udp.SendAsync(
+                    request,
+                    request.Length,
+                    new IPEndPoint(IPAddress.Broadcast, discoveryPort));
+
+                using var timeout =
+                    new CancellationTokenSource(TimeSpan.FromSeconds(3));
+
+                while (!timeout.IsCancellationRequested)
+                {
+                    UdpReceiveResult response;
+
+                    try
+                    {
+                        response = await udp.ReceiveAsync(timeout.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    string message =
+                        Encoding.UTF8.GetString(response.Buffer).Trim();
+
+                    string[] fields = message.Split(';');
+
+                    if (fields.Length < 7 ||
+                        !string.Equals(
+                            fields[0],
+                            "SMARTGATE",
+                            StringComparison.OrdinalIgnoreCase) ||
+                        fields[1] != "1")
+                    {
+                        continue;
+                    }
+
+                    if (!int.TryParse(fields[2], out int gateId) ||
+                        !int.TryParse(fields[3], out int siteId) ||
+                        !int.TryParse(fields[5], out int tcpPort) ||
+                        tcpPort < 1 || tcpPort > 65535)
+                    {
+                        continue;
+                    }
+
+                    string ipAddress = fields[4];
+
+                    if (!IPAddress.TryParse(ipAddress, out _))
+                        ipAddress = response.RemoteEndPoint.Address.ToString();
+
+                    // Undvik dubbletter
+                    if (_discoveredGates.Any(g =>
+                        g.IpAddress == ipAddress &&
+                        g.TcpPort == tcpPort))
+                    {
+                        continue;
+                    }
+
+                    _discoveredGates.Add(new DiscoveredSmartGate
+                    {
+                        GateId = gateId,
+                        SiteId = siteId,
+                        IpAddress = ipAddress,
+                        TcpPort = tcpPort,
+                        FirmwareVersion = fields[6]
+                    });
+                }
+
+                DiscoveryStatusText.Text = _discoveredGates.Count == 0
+                    ? "Inga SmartGate hittades."
+                    : $"Hittade {_discoveredGates.Count} SmartGate-enhet(er).";
+
+                AppendLog(
+                    $"UDP-sökningen klar. Hittade {_discoveredGates.Count} enhet(er).");
+            }
+            catch (Exception ex)
+            {
+                DiscoveryStatusText.Text = "Sökningen misslyckades.";
+
+                AppendLog($"UDP-SÖKFEL: {ex.Message}");
+
+                MessageBox.Show(
+                    ex.Message,
+                    "SmartGate-sökning",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            finally
+            {
+                _isSearchingForGates = false;
+                UpdateConnectionButtons();
+            }
+        }
+
+
+        private void DiscoveredGatesGrid_MouseDoubleClick(    object sender,    System.Windows.Input.MouseButtonEventArgs e)
+        {
+            if (DiscoveredGatesGrid.SelectedItem
+                is not DiscoveredSmartGate gate)
+                return;
+
+            if (_tcpTransport.IsConnected)
+                return;
+
+            WifiIpTextBox.Text = gate.IpAddress;
+
+            WifiPortTextBox.Text =
+                gate.TcpPort.ToString(CultureInfo.InvariantCulture);
+
+            // Växla till Wi-Fi/TCP
+            ConnectionTypeComboBox.SelectedIndex = 1;
+            UpdateConnectionMode();
+
+            AppendLog(
+                $"Valde SmartGate {gate.GateId} på " +
+                $"{gate.IpAddress}:{gate.TcpPort}.");
+
+            StatusText.Text =
+                $"Status: Vald SmartGate {gate.GateId} – redo att ansluta";
+        }
 
         private void LoadAllSettings()
         {
@@ -892,11 +1043,21 @@ namespace smartgate_wpf_adm
 
             btnUsbDisconnect.IsEnabled = usbConnected;
             btnTcpDisconnect.IsEnabled = tcpConnected;
+            btnFindGate.IsEnabled = !tcpConnected && !_isSearchingForGates;
         }
         protected override void OnContentRendered(EventArgs e)
         {
             base.OnContentRendered(e);
             UpdateConnectionButtons();
+        }
+
+        private sealed class DiscoveredSmartGate
+        {
+            public int GateId { get; init; }
+            public int SiteId { get; init; }
+            public string IpAddress { get; init; } = "";
+            public int TcpPort { get; init; }
+            public string FirmwareVersion { get; init; } = "";
         }
     }
 }

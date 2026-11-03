@@ -521,6 +521,51 @@
             </TabItem>
 
 
+
+            <TabItem Header="Enhetssökning">
+                <Grid Margin="15">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,12">
+                        <Button x:Name="btnFindGate"
+                                Content="Sök efter SmartGate"
+                                Width="170"
+                                Height="32"
+                                Click="FindGate_Click"/>
+                        <TextBlock x:Name="DiscoveryStatusText"
+                                   Text="Sökningen hittar SmartGate-enheter på det lokala nätverket."
+                                   VerticalAlignment="Center"
+                                   Margin="15,0,0,0"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="1"
+                               Text="Dubbelklicka på en enhet för att använda dess IP-adress och TCP-port."
+                               Foreground="Gray"
+                               Margin="0,0,0,8"/>
+
+                    <DataGrid x:Name="DiscoveredGatesGrid"
+                              Grid.Row="2"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              CanUserAddRows="False"
+                              SelectionMode="Single"
+                              MouseDoubleClick="DiscoveredGatesGrid_MouseDoubleClick">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Gate ID" Binding="{Binding GateId}" Width="*"/>
+                            <DataGridTextColumn Header="Site ID" Binding="{Binding SiteId}" Width="*"/>
+                            <DataGridTextColumn Header="IP-adress" Binding="{Binding IpAddress}" Width="2*"/>
+                            <DataGridTextColumn Header="TCP-port" Binding="{Binding TcpPort}" Width="*"/>
+                            <DataGridTextColumn Header="Firmware" Binding="{Binding FirmwareVersion}" Width="2*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </TabItem>
+
             <TabItem Header="Logg">
                 <Grid Margin="10">
                     <Grid.ColumnDefinitions>
