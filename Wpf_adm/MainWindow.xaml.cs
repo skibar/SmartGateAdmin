@@ -1,20 +1,21 @@
 ﻿
-using System;
-using System.Collections.Generic;
-using System.Globalization;
-using System.Linq;
-using System.Threading.Tasks;
-using System.Windows;
 using smartgate_wpf_adm.models;
 using smartgate_wpf_adm.Services;
-using System.Windows.Threading;
+using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
-using System.Text.Json;
+using System.Linq;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
-using System.Collections.ObjectModel;
+using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Threading;
 
 
 namespace smartgate_wpf_adm
@@ -34,6 +35,7 @@ namespace smartgate_wpf_adm
 
         private readonly DispatcherTimer _overviewRefreshTimer = new();
         private bool _overviewRefreshOnly;
+        private bool _suppressAutomaticSettingsLog;
         private const int MaxLogRows = 1000;
 
         public MainWindow()
@@ -57,7 +59,6 @@ namespace smartgate_wpf_adm
 
             _overviewRefreshTimer.Interval = TimeSpan.FromSeconds(60);
             _overviewRefreshTimer.Tick += OverviewRefreshTimer_Tick;
-            _overviewRefreshTimer.Start();
 
         }
 
@@ -161,6 +162,8 @@ namespace smartgate_wpf_adm
                 return;
 
             _overviewRefreshOnly = true;
+            _suppressAutomaticSettingsLog = true;
+
             LoadAllSettings();
         }
 
@@ -254,6 +257,26 @@ namespace smartgate_wpf_adm
             }
         }
 
+        private void AutoRefresh_Checked(object sender, RoutedEventArgs e)
+        {
+            _overviewRefreshTimer.Start();
+            AppendLog("Automatisk uppdatering aktiverad.");
+        }
+
+        private void AutoRefresh_Unchecked(object sender, RoutedEventArgs e)
+        {
+            _overviewRefreshTimer.Stop();
+            AppendLog("Automatisk uppdatering avstängd.");
+        }
+
+        private void RefreshAllSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isReadingSettings || _isSavingSettings)
+                return;
+
+            _overviewRefreshOnly = false;
+            LoadAllSettings();
+        }
 
         private async void FindGate_Click(object sender, RoutedEventArgs e)
         {
@@ -269,40 +292,73 @@ namespace smartgate_wpf_adm
             AppendLog("Startar UDP-sökning efter SmartGate.");
 
             const int discoveryPort = 4243;
-            const string discoveryMessage = "SMARTGATE_DISCOVER_V1";
+            const int searchDurationSeconds = 8;
+            const int sendIntervalMilliseconds = 2000;
 
             try
             {
                 using var udp = new UdpClient(0);
                 udp.EnableBroadcast = true;
 
-                byte[] request = Encoding.UTF8.GetBytes(discoveryMessage);
 
-                await udp.SendAsync(
-                    request,
-                    request.Length,
-                    new IPEndPoint(IPAddress.Broadcast, discoveryPort));
+                IPAddress broadcastAddress = GetBroadcastAddress();
+                AppendLog($"UDP broadcast-adress: {broadcastAddress}");
+
+                byte[] request =
+                    Encoding.UTF8.GetBytes("SMARTGATE_DISCOVER_V1");
 
                 using var timeout =
-                    new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                    new CancellationTokenSource(
+                        TimeSpan.FromSeconds(searchDurationSeconds));
 
+                var nextSend = DateTime.UtcNow;
+
+                // Starta mottagningen direkt
+                ValueTask<UdpReceiveResult> receiveTask = udp.ReceiveAsync(timeout.Token);
+                DateTime lastDeviceFound = DateTime.MinValue;
                 while (!timeout.IsCancellationRequested)
                 {
+                    if (_discoveredGates.Count > 0 && DateTime.UtcNow - lastDeviceFound >= TimeSpan.FromSeconds(2))
+                        break;
+
+                    // Skicka söksignal
+                    if (DateTime.UtcNow >= nextSend)
+                    {
+                        //  await udp.SendAsync(request, request.Length, new IPEndPoint(IPAddress.Broadcast, discoveryPort));
+                        await udp.SendAsync(request, request.Length, new IPEndPoint(broadcastAddress, discoveryPort));
+                        AppendLog("UDP: Söksignal skickad.");
+
+                        nextSend = DateTime.UtcNow.AddMilliseconds(
+                            sendIntervalMilliseconds);
+                    }
+
+                    // Vänta på svar eller fortsätt efter 100 ms
+                    await Task.WhenAny(receiveTask.AsTask(), Task.Delay(100));
+
+                    if (!receiveTask.IsCompleted)
+                        continue;
+
                     UdpReceiveResult response;
 
                     try
                     {
-                        response = await udp.ReceiveAsync(timeout.Token);
+                        response = await receiveTask;
                     }
                     catch (OperationCanceledException)
                     {
                         break;
                     }
 
+                    // Starta mottagning av nästa paket
+                    receiveTask = udp.ReceiveAsync(timeout.Token);
+
                     string message =
                         Encoding.UTF8.GetString(response.Buffer).Trim();
 
                     string[] fields = message.Split(';');
+
+                    AppendLog(
+                        $"UDP RX från {response.RemoteEndPoint}: {message}");
 
                     if (fields.Length < 7 ||
                         !string.Equals(
@@ -343,7 +399,14 @@ namespace smartgate_wpf_adm
                         TcpPort = tcpPort,
                         FirmwareVersion = fields[6]
                     });
+
+                    lastDeviceFound = DateTime.UtcNow;
+
+                    AppendLog($"Hittade SmartGate {gateId} på {ipAddress}.");
                 }
+
+                // Avbryt eventuell väntande mottagning
+                timeout.Cancel();
 
                 DiscoveryStatusText.Text = _discoveredGates.Count == 0
                     ? "Inga SmartGate hittades."
@@ -372,30 +435,96 @@ namespace smartgate_wpf_adm
         }
 
 
-        private void DiscoveredGatesGrid_MouseDoubleClick(    object sender,    System.Windows.Input.MouseButtonEventArgs e)
+        private static IPAddress GetBroadcastAddress()
+        {
+            var wifi = NetworkInterface.GetAllNetworkInterfaces()
+                .FirstOrDefault(ni =>
+                    ni.OperationalStatus == OperationalStatus.Up &&
+                    ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
+
+            if (wifi == null)
+                throw new InvalidOperationException("Hittade inget aktivt WiFi-nätverkskort.");
+
+            foreach (var address in wifi.GetIPProperties().UnicastAddresses)
+            {
+                if (address.Address.AddressFamily != AddressFamily.InterNetwork)
+                    continue;
+
+                byte[] ip = address.Address.GetAddressBytes();
+                byte[] mask = address.IPv4Mask.GetAddressBytes();
+                byte[] broadcast = new byte[4];
+
+                for (int i = 0; i < 4; i++)
+                    broadcast[i] = (byte)(ip[i] | ~mask[i]);
+
+                return new IPAddress(broadcast);
+            }
+
+            throw new InvalidOperationException("WiFi saknar IPv4-adress.");
+        }
+        private  void LogNetworkInterfaces()
+        {
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up)
+                    continue;
+
+                var properties = ni.GetIPProperties();
+
+                foreach (var address in properties.UnicastAddresses)
+                {
+                    if (address.Address.AddressFamily != AddressFamily.InterNetwork)
+                        continue;
+
+                    byte[] ip = address.Address.GetAddressBytes();
+                    byte[] mask = address.IPv4Mask.GetAddressBytes();
+                    byte[] broadcast = new byte[4];
+
+                    for (int i = 0; i < 4; i++)
+                        broadcast[i] = (byte)(ip[i] | ~mask[i]);
+                    AppendLog($"{ni.Name} | {ni.NetworkInterfaceType} | IP: {address.Address} | Mask: {address.IPv4Mask} | Broadcast: {new IPAddress(broadcast)}");
+
+                }
+            }
+        }
+
+
+
+        private void DiscoveredGatesGrid_MouseDoubleClick(
+            object sender,
+            System.Windows.Input.MouseButtonEventArgs e)
         {
             if (DiscoveredGatesGrid.SelectedItem
                 is not DiscoveredSmartGate gate)
                 return;
 
-            if (_tcpTransport.IsConnected)
+            if (_isSavingSettings)
+            {
+                MessageBox.Show("Vänta tills inställningarna har sparats.");
                 return;
+            }
 
+            // Koppla ner eventuell befintlig anslutning
+            _isReadingSettings = false;
+            _tcpTransport.Disconnect();
+            _serialTransport.Disconnect();
+
+            UpdateConnectionButtons();
+
+            // Ange den nya enhetens anslutningsuppgifter
             WifiIpTextBox.Text = gate.IpAddress;
-
             WifiPortTextBox.Text =
                 gate.TcpPort.ToString(CultureInfo.InvariantCulture);
 
-            // Växla till Wi-Fi/TCP
             ConnectionTypeComboBox.SelectedIndex = 1;
             UpdateConnectionMode();
 
             AppendLog(
-                $"Valde SmartGate {gate.GateId} på " +
-                $"{gate.IpAddress}:{gate.TcpPort}.");
+                $"Växlar till SmartGate {gate.GateId} " +
+                $"({gate.IpAddress}:{gate.TcpPort}).");
 
-            StatusText.Text =
-                $"Status: Vald SmartGate {gate.GateId} – redo att ansluta";
+            // Anslut till den nya enheten
+            Connect_Click(this, new RoutedEventArgs());
         }
 
         private void LoadAllSettings()
@@ -422,7 +551,7 @@ namespace smartgate_wpf_adm
                 else
                     _serialTransport.Send("getsettings\n");
 
-                AppendLog("Inställningar hämtas automatiskt från SmartGate.");
+                AppendLog(_overviewRefreshOnly ? "Automatisk avläsning av inställningar." : "Manuell avläsning av inställningar.");
                 StatusText.Text = "Status: Läser inställningar...";
             }
             catch (Exception ex)
@@ -432,6 +561,12 @@ namespace smartgate_wpf_adm
                 StatusText.Text = "Status: Kunde inte läsa inställningar";
             }
         }
+
+        private void clearAllSettings_Click(object sender, RoutedEventArgs e)
+        {
+            LogTextBox.Clear();
+        }
+
 
         private void Disconnect_Click(object sender, RoutedEventArgs e)
         {
@@ -798,16 +933,22 @@ namespace smartgate_wpf_adm
 
         private void OnDataReceived(string data)
         {
+            // Fånga tillståndet direkt när data tas emot.
+            bool suppressLog = _overviewRefreshOnly;
+
             Dispatcher.InvokeAsync(() =>
             {
-                AppendLog($"RX: {data}");
+                if (!suppressLog)
+                    AppendLog($"RX: {data}");
 
                 if (!_isReadingSettings)
                     return;
 
                 if (!_settingsResponseStarted)
                 {
-                    if (data.Contains("Nuvarande inställningar", StringComparison.OrdinalIgnoreCase))
+                    if (data.Contains(
+                        "Nuvarande inställningar",
+                        StringComparison.OrdinalIgnoreCase))
                     {
                         _settingsResponseStarted = true;
                         _settingsResponseLines.Clear();
@@ -822,24 +963,30 @@ namespace smartgate_wpf_adm
                 {
                     _isReadingSettings = false;
 
-                    _loadedSettings = GateSettingsParser.Parse(_settingsResponseLines);
+                    _loadedSettings =
+                        GateSettingsParser.Parse(_settingsResponseLines);
 
                     if (!_overviewRefreshOnly)
+                    {
                         ShowSettings(_loadedSettings);
+                        AppendLog("Inställningarna har lästs in.");
+                        StatusText.Text = "Status: Inställningar inlästa";
+                    }
+                    else
+                    {
+                        StatusText.Text = "Status: Systemet är uppkopplat";
+                    }
 
                     ShowOverview(_loadedSettings);
+
                     _overviewRefreshOnly = false;
 
-                    StatusText.Text = "Status: Inställningar inlästa";
-                    AppendLog("Inställningarna har lästs in.");
-                    StatusText.Text = "Status: Systemet är uppkopplat";
                     return;
                 }
 
                 _settingsResponseLines.Add(data);
             });
         }
-
         private void ShowSettings(GateSettings settings)
         {
             txtGateId.Text = settings.GateId.ToString(CultureInfo.InvariantCulture);
@@ -942,10 +1089,13 @@ namespace smartgate_wpf_adm
             if (ConnectionTypeComboBox.SelectedIndex == 1)
             {
 
-                if (!string.Equals(
-                        command,
-                        "getsettings",
-                        StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(command, "getsettings", StringComparison.OrdinalIgnoreCase))
+                {
+                    _tcpTransport.Send("getsettings\n");
+                    AppendLog("TX: getsettings [Wi-Fi, LF]");
+                    CommandTextBox.Clear();
+                }
+                else
                 {
                     MessageBox.Show(
                         "TCP-testversionen stöder just nu bara getsettings.");
@@ -1040,7 +1190,8 @@ namespace smartgate_wpf_adm
 
             btnUsbConnect.IsEnabled = !connected;
             btnTcpConnect.IsEnabled = !connected;
-
+            btnManualRead.IsEnabled = connected;
+            btnClearLogg.IsEnabled = connected;
             btnUsbDisconnect.IsEnabled = usbConnected;
             btnTcpDisconnect.IsEnabled = tcpConnected;
             btnFindGate.IsEnabled = !tcpConnected && !_isSearchingForGates;
