@@ -13,9 +13,9 @@
 
     <Grid Margin="20">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto" MinHeight="139"/>
+            <RowDefinition Height="Auto" MinHeight="107.92"/>
+            <RowDefinition/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
@@ -30,10 +30,10 @@
 
 
         <!-- Anslutning -->
-        <GroupBox Grid.Row="1"
+        <GroupBox
           Header="Anslutning"
           Padding="10"
-          Margin="0,0,0,20">
+          Margin="0,40,0,20" Grid.RowSpan="2">
 
             <StackPanel>
 
@@ -62,10 +62,10 @@
 
                     <TextBlock Text="COM-port:"
                        VerticalAlignment="Center"
-                       Margin="0,0,10,0"/>
+                       Margin="0,0,10,0" Width="54"/>
 
                     <ComboBox x:Name="PortComboBox"
-                      Width="120"
+                      Width="110"
                       Height="28"
                       Margin="0,0,10,0"/>
 
@@ -100,7 +100,7 @@
                         <TextBox x:Name="WifiIpTextBox"
                          Text="192.168.86.191"
                          Width="103"
-                         Height="28"/>
+                         Height="22"/>
 
                         <TextBlock Text="Port:"
                            VerticalAlignment="Center"
@@ -109,7 +109,7 @@
                         <TextBox x:Name="WifiPortTextBox"
                          Text="4242"
                          Width="65"
-                         Height="28"
+                         Height="22"
                            Margin="0,0,8,0"/>
 
                         <TextBlock Text="Token:"
@@ -118,19 +118,19 @@
 
                         <PasswordBox x:Name="WifiTokenBox"
                              Width="174"
-                             Height="28"
+                             Height="18"
                                       Margin="0,0,8,0"/>
 
                         <Button Content="Anslut via Wi-Fi"
                         x:Name="btnTcpConnect"
                         Width="125"
                         Height="28"
-                        Click="Connect_Click"/>
+                        Click="Connect_Click"
+                        Margin="10,0,8,0"/>
 
                         <Button Content="Koppla från"
                         x:Name="btnTcpDisconnect"
-                        Width="100"
-                        Margin="10,0,0,0"
+                        Width="125"
                         Click="Disconnect_Click"/>
 
                     </WrapPanel>
@@ -372,10 +372,10 @@
 
                         <DockPanel Grid.Row="0" Margin="0,0,0,10">
                             <Button Content="Läs från SmartGate"
-                    Width="150"
-                    Height="32"
-                    Margin="0,0,10,0"
-                    Click="LoadSettings_Click"/>
+                            Width="150"
+                            Height="32"
+                            Margin="0,0,10,0"
+                            Click="LoadSettings_Click"/>
 
                             <Button Content="Spara ändringar"
                     Width="150"
@@ -391,65 +391,58 @@
                       VerticalScrollBarVisibility="Auto">
                             <StackPanel Margin="5">
 
-                                <GroupBox Header="Identitet och system"
+                                <GroupBox Header="Identitet"
                           Padding="12"
                           Margin="0,0,0,12">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="160"/>
-                                            <ColumnDefinition Width="12*"/>
-                                            <ColumnDefinition Width="178"/>
-                                            <ColumnDefinition Width="13*"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="160"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Gate ID" VerticalAlignment="Center" Margin="0,5"/>
+                                        <TextBox x:Name="txtGateId" Grid.Row="0" Grid.Column="1" Margin="5"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Text="Site ID" VerticalAlignment="Center" Margin="10,5,0,5"/>
+                                        <TextBox x:Name="txtSiteId" Grid.Row="0" Grid.Column="3" Margin="5"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Programversion" VerticalAlignment="Center" Margin="0,5"/>
+                                        <TextBox x:Name="txtVersion" Grid.Row="1" Grid.Column="1" Margin="5"/>
+                                    </Grid>
+                                </GroupBox>
+
+                                <GroupBox Header="ESP32 – tidsinställningar"
+                          Padding="12"
+                          Margin="0,0,0,12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="220"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="220"/>
+                                            <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-
-                                        <TextBlock Grid.Column="0"
-                                   Text="Gate ID"
-                                   VerticalAlignment="Center" Height="16"/>
-                                        <TextBox x:Name="txtGateId"
-                                 Grid.Row="0"
-                                 Margin="110,5,5,5" Grid.ColumnSpan="2"/>
-
-                                        <TextBlock Grid.Column="2"
-                                   Text="Site ID"
-                                   VerticalAlignment="Center"
-                                   Margin="10,0,0,0" Height="16"/>
-                                        <TextBox x:Name="txtSiteId"
-                                 Grid.Row="0" Grid.Column="2"
-                                 Margin="114,5,5,5" Grid.ColumnSpan="2"/>
-
-                                        <TextBlock Grid.Row="1" Grid.Column="0"
-                                   Text="Programversion"
-                                   VerticalAlignment="Center" Height="16"/>
-                                        <TextBox x:Name="txtVersion"
-                                 Grid.Row="1"
-                                 Margin="110,5,5,5" Grid.ColumnSpan="2"/>
-
-                                        <TextBlock Grid.Row="2"
-                                   Text="LED-duration (ms)"
-                                   VerticalAlignment="Top"
-                                   Margin="-4,7,212,0" Height="16" Grid.ColumnSpan="2"/>
-                                        <TextBox x:Name="txtLedDuration"
-                                 Grid.Row="2"
-                                 Margin="110,5,0,5" Grid.ColumnSpan="2"/>
-
-                                        <TextBox x:Name="txtRfidAuthTimeout"
-                                 Grid.Row="2"
-                                 Grid.Column="2"
-                                 Margin="114,7,10,0"
-                                 Grid.ColumnSpan="2" Height="18" VerticalAlignment="Top"/>
-
-                                        <TextBlock Grid.Row="2"
-                                   Grid.Column="2"
-                                   Text="RFID timeout (ms)"
-                                   VerticalAlignment="Top" Height="16" Margin="10,7,8,0"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="RFID timeout (ms)" VerticalAlignment="Center" Margin="0,5"/>
+                                        <TextBox x:Name="txtRfidAuthTimeout" Grid.Row="0" Grid.Column="1" Margin="5"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="2" Text="IR debounce (ms)" VerticalAlignment="Center" Margin="10,5,0,5"/>
+                                        <TextBox x:Name="txtIrDebounce" Grid.Row="0" Grid.Column="3" Margin="5"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Invalid card red (ms)" VerticalAlignment="Center" Margin="0,5"/>
+                                        <TextBox x:Name="txtInvalidRed" Grid.Row="1" Grid.Column="1" Margin="5"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="2" Text="Red post passage (ms)" VerticalAlignment="Center" Margin="10,5,0,5"/>
+                                        <TextBox x:Name="txtRedPost" Grid.Row="1" Grid.Column="3" Margin="5"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="IR rearm delay (ms)" VerticalAlignment="Center" Margin="0,5"/>
+                                        <TextBox x:Name="txtIrRearm" Grid.Row="2" Grid.Column="1" Margin="5"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="2" Text="Relä-duration (ms)" VerticalAlignment="Center" Margin="10,5,0,5"/>
+                                        <TextBox x:Name="txtLedDuration" Grid.Row="2" Grid.Column="3" Margin="5"/>
                                     </Grid>
                                 </GroupBox>
-
 
                                 <GroupBox Header="Nätverk"
                                   Padding="12"
@@ -475,7 +468,7 @@
 
                                         <TextBox x:Name="txtWifi"
                  Grid.Row="0" Grid.Column="1"
-                 Margin="5"/>
+                 Margin="5,5,10,5"/>
 
                                         <TextBlock Grid.Row="1" Grid.Column="0"
                    Text="Wi-Fi-lösenord"
@@ -484,26 +477,26 @@
 
                                         <TextBox x:Name="txtPassword"
                  Grid.Row="1" Grid.Column="1"
-                 Margin="5"/>
+                 Margin="5,5,10,5"/>
 
                                         <!-- Höger kolumn -->
-                                        <TextBlock Grid.Row="0" Grid.Column="2"
+                                        <TextBlock Grid.Column="2"
                    Text="Serveradress"
                    VerticalAlignment="Center"
-                   Margin="16,5,8,5"/>
+                   Margin="10,0,8,0"/>
 
                                         <TextBox x:Name="txtServer"
                  Grid.Row="0" Grid.Column="3"
-                 Margin="5"/>
+                 Margin="36,5,5,5"/>
 
                                         <TextBlock Grid.Row="1" Grid.Column="2"
                    Text="Databas"
                    VerticalAlignment="Center"
-                   Margin="16,5,8,5"/>
+                   Margin="10,0,8,0"/>
 
                                         <TextBox x:Name="txtDatabase"
                  Grid.Row="1" Grid.Column="3"
-                 Margin="5"/>
+                 Margin="36,5,5,5"/>
                                     </Grid>
                                 </GroupBox>
 
@@ -529,7 +522,7 @@
                                         <TextBlock Grid.Column="4"
                    Text="Datum och tid"
                    VerticalAlignment="Center"
-                   Margin="70,0,291,0"/>
+                   Margin="52,0,268,0"/>
 
                                         <TextBox x:Name="txtDateTime"
                  Grid.Column="4"
@@ -642,10 +635,27 @@
         <!-- Status bar -->
 
         <StatusBar Grid.Row="3" Margin="0,15,0,0">
-            <StatusBarItem>
+            <Grid Width="{Binding ActualWidth, RelativeSource={RelativeSource AncestorType=StatusBar}}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
                 <TextBlock x:Name="StatusText"
-                   Text="Status: Ej ansluten"/>
-            </StatusBarItem>
+                   Grid.Column="0"
+                   Text="Status: Ej ansluten"
+                   VerticalAlignment="Center"/>
+
+                <TextBlock x:Name="VersionText"
+                   Grid.Column="1"
+                   Foreground="Gray"
+                   FontSize="11"
+                   Text="Version"
+                   HorizontalAlignment="Stretch"
+                   TextAlignment="Right"
+                   VerticalAlignment="Center"
+                   Margin="5,0,10,0"/>
+            </Grid>
         </StatusBar>
     </Grid>
 </Window>

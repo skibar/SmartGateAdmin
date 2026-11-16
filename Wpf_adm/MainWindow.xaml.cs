@@ -4,12 +4,14 @@ using smartgate_wpf_adm.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.Intrinsics.Arm;
 using System.Text;
 using System.Text.Json;
@@ -17,7 +19,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
-
 
 namespace smartgate_wpf_adm
 {
@@ -43,6 +44,8 @@ namespace smartgate_wpf_adm
         {
             InitializeComponent();
             DiscoveredGatesGrid.ItemsSource = _discoveredGates;
+
+            SetVersionInfo();
 
             LoadAppConfig();
 
@@ -111,7 +114,7 @@ namespace smartgate_wpf_adm
         }
 
         /// <summary>
-        /// Läser in TCP värden så de är förifyllda
+        /// Läser in TCP värden så de är förifyllda...
         /// </summary>
         private void LoadAppConfig()
         {
@@ -256,6 +259,24 @@ namespace smartgate_wpf_adm
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
             }
+        }
+
+        private void SetVersionInfo()
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            var version = assembly.GetName().Version;
+
+            string versionText = version == null
+                ? "Okänd"
+                : $"{version.Major}.{version.Minor}.{version.Build}";
+
+            string exePath = Environment.ProcessPath
+                ?? Process.GetCurrentProcess().MainModule?.FileName
+                ?? AppContext.BaseDirectory;
+
+            DateTime buildDate = File.GetLastWriteTime(exePath);
+
+            VersionText.Text =                $"Version {versionText} · Byggd {buildDate:yyyy-MM-dd}";
         }
 
         private void AutoRefresh_Checked(object sender, RoutedEventArgs e)
@@ -686,14 +707,17 @@ namespace smartgate_wpf_adm
             if (!TryGetInt(txtGateId.Text, out int gateId) || gateId <= 0 ||
                 !TryGetInt(txtSiteId.Text, out int siteId) || siteId <= 0 ||
                 !TryGetInt(txtVersion.Text, out int version) || version <= 0 ||
-                !TryGetInt(txtLedDuration.Text, out int ledDuration) || ledDuration <= 0 ||
-                !TryGetInt(txtRfidAuthTimeout.Text, out int rfidAuthTimeout) || rfidAuthTimeout <= 0 || rfidAuthTimeout > 60000)
+                !TryGetInt(txtLedDuration.Text, out int ledDuration) || ledDuration <= 0 || ledDuration > 60000 ||
+                !TryGetInt(txtRfidAuthTimeout.Text, out int rfidAuthTimeout) || rfidAuthTimeout <= 0 || rfidAuthTimeout > 60000 ||
+                !TryGetInt(txtIrDebounce.Text, out int irDebounce) || irDebounce <= 0 || irDebounce > 60000 ||
+                !TryGetInt(txtInvalidRed.Text, out int invalidRed) || invalidRed <= 0 || invalidRed > 60000 ||
+                !TryGetInt(txtRedPost.Text, out int redPost) || redPost <= 0 || redPost > 60000 ||
+                !TryGetInt(txtIrRearm.Text, out int irRearm) || irRearm <= 0 || irRearm > 60000)
             //!TryGetInt(txtIrExists.Text, out int irExists) || (irExists != 0 && irExists != 1)
             {
                 MessageBox.Show(
-                    "Kontrollera Gate ID, Site ID, programversion, LED-duration och IR-gate.\n" +
-                    "ID och version ska vara positiva heltal. LED-duration ska vara positiv. " +
-                    "IR-gate ska vara 0 eller 1.",
+                    "Kontrollera Gate ID, Site ID, programversion och samtliga tidsvärden.\n" +
+                    "Alla tidsvärden ska vara heltal mellan 1 och 60000 ms.",
                     "Ogiltiga värden",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
@@ -768,6 +792,18 @@ namespace smartgate_wpf_adm
 
             if (rfidAuthTimeout != _loadedSettings.RfidAuthTimeout)
                 commands.Add(($"setauthtime {rfidAuthTimeout}", false, false));
+
+            if (irDebounce != _loadedSettings.IrDebounce)
+                commands.Add(($"setirdebounce {irDebounce}", false, false));
+
+            if (invalidRed != _loadedSettings.InvalidRed)
+                commands.Add(($"setinvalidred {invalidRed}", false, false));
+
+            if (redPost != _loadedSettings.RedPost)
+                commands.Add(($"setredpost {redPost}", false, false));
+
+            if (irRearm != _loadedSettings.IrRearm)
+                commands.Add(($"setirrearm {irRearm}", false, false));
 
             if (irExists != _loadedSettings.IrExists)
                 commands.Add(($"irexist {irExists}", false, false));
@@ -1065,6 +1101,10 @@ namespace smartgate_wpf_adm
             txtVersion.Text = settings.Version.ToString(CultureInfo.InvariantCulture);
             txtLedDuration.Text = settings.LedDuration.ToString(CultureInfo.InvariantCulture);
             txtRfidAuthTimeout.Text = settings.RfidAuthTimeout.ToString(CultureInfo.InvariantCulture);
+            txtIrDebounce.Text = settings.IrDebounce.ToString(CultureInfo.InvariantCulture);
+            txtInvalidRed.Text = settings.InvalidRed.ToString(CultureInfo.InvariantCulture);
+            txtRedPost.Text = settings.RedPost.ToString(CultureInfo.InvariantCulture);
+            txtIrRearm.Text = settings.IrRearm.ToString(CultureInfo.InvariantCulture);
             txtWifi.Text = settings.Wifi;
             txtPassword.Text = settings.Password;
             txtServer.Text = settings.Server;

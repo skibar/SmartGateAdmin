@@ -33,5 +33,7 @@
         public int BlueLedPin { get; set; }
 
         public string ExternalStatus { get; set; } = "";
+
+
     }
 }
