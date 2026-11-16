@@ -10,6 +10,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.Intrinsics.Arm;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -278,6 +279,7 @@ namespace smartgate_wpf_adm
             LoadAllSettings();
         }
 
+
         private async void FindGate_Click(object sender, RoutedEventArgs e)
         {
             if (_tcpTransport.IsConnected || _isSearchingForGates)
@@ -285,7 +287,6 @@ namespace smartgate_wpf_adm
 
             _isSearchingForGates = true;
             btnFindGate.IsEnabled = false;
-
             _discoveredGates.Clear();
 
             DiscoveryStatusText.Text = "Söker efter SmartGate...";
@@ -295,117 +296,180 @@ namespace smartgate_wpf_adm
             const int searchDurationSeconds = 8;
             const int sendIntervalMilliseconds = 2000;
 
+            var udpClients = new List<UdpClient>();
+            var broadcastAddresses = new List<IPAddress>();
+            var receiveTasks = new List<Task<UdpReceiveResult>>();
+
             try
             {
-                using var udp = new UdpClient(0);
-                udp.EnableBroadcast = true;
+                // Hitta alla aktiva Ethernet- och WiFi-adaptrar
+                var interfaces = NetworkInterface.GetAllNetworkInterfaces()
+                    .Where(ni =>
+                        ni.OperationalStatus == OperationalStatus.Up &&
+                        (ni.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||
+                         ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211));
 
+                foreach (var networkInterface in interfaces)
+                {
+                    foreach (var address in networkInterface.GetIPProperties().UnicastAddresses)
+                    {
+                        if (address.Address.AddressFamily != AddressFamily.InterNetwork ||
+                            address.IPv4Mask == null ||
+                            IPAddress.IsLoopback(address.Address))
+                            continue;
 
-                IPAddress broadcastAddress = GetBroadcastAddress();
-                AppendLog($"UDP broadcast-adress: {broadcastAddress}");
+                        byte[] ip = address.Address.GetAddressBytes();
+                        byte[] mask = address.IPv4Mask.GetAddressBytes();
+                        byte[] broadcast = new byte[4];
 
-                byte[] request =
-                    Encoding.UTF8.GetBytes("SMARTGATE_DISCOVER_V1");
+                        for (int i = 0; i < 4; i++)
+                            broadcast[i] = (byte)(ip[i] | ~mask[i]);
 
-                using var timeout =
-                    new CancellationTokenSource(
-                        TimeSpan.FromSeconds(searchDurationSeconds));
+                        IPAddress broadcastAddress = new IPAddress(broadcast);
 
-                var nextSend = DateTime.UtcNow;
+                        try
+                        {
+                            // En separat UDP-klient för varje nätverkskort
+                            var udp = new UdpClient(
+                                new IPEndPoint(address.Address, 0));
 
-                // Starta mottagningen direkt
-                ValueTask<UdpReceiveResult> receiveTask = udp.ReceiveAsync(timeout.Token);
+                            udp.EnableBroadcast = true;
+
+                            udpClients.Add(udp);
+                            broadcastAddresses.Add(broadcastAddress);
+
+                            receiveTasks.Add(udp.ReceiveAsync());
+                            AppendLog(
+                                $"Aktivt nätverk: {networkInterface.Name}, " +
+                                $"IP: {address.Address}, " +
+                                $"Broadcast: {broadcastAddress}");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog(
+                                $"Kunde inte öppna UDP på {address.Address}: {ex.Message}");
+                        }
+                    }
+                }
+
+                if (udpClients.Count == 0)
+                    throw new InvalidOperationException(
+                        "Hittade inga aktiva nätverkskort med användbar IPv4-adress.");
+
+                byte[] request = Encoding.UTF8.GetBytes("SMARTGATE_DISCOVER_V1");
+
+                using var timeout = new CancellationTokenSource(
+                    TimeSpan.FromSeconds(searchDurationSeconds));
+
+                DateTime nextSend = DateTime.UtcNow;
                 DateTime lastDeviceFound = DateTime.MinValue;
+
                 while (!timeout.IsCancellationRequested)
                 {
-                    if (_discoveredGates.Count > 0 && DateTime.UtcNow - lastDeviceFound >= TimeSpan.FromSeconds(2))
+                    // Avsluta två sekunder efter senaste hittade enhet
+                    if (_discoveredGates.Count > 0 &&
+                        DateTime.UtcNow - lastDeviceFound >= TimeSpan.FromSeconds(2))
                         break;
 
-                    // Skicka söksignal
+                    // Skicka sökförfrågan via samtliga nätverkskort
                     if (DateTime.UtcNow >= nextSend)
                     {
-                        //  await udp.SendAsync(request, request.Length, new IPEndPoint(IPAddress.Broadcast, discoveryPort));
-                        await udp.SendAsync(request, request.Length, new IPEndPoint(broadcastAddress, discoveryPort));
-                        AppendLog("UDP: Söksignal skickad.");
+                        for (int i = 0; i < udpClients.Count; i++)
+                        {
+                            try
+                            {
+                                await udpClients[i].SendAsync(
+                                    request,
+                                    request.Length,
+                                    new IPEndPoint(
+                                        broadcastAddresses[i],
+                                        discoveryPort));
+
+                                AppendLog(
+                                    $"UDP: Söksignal skickad till {broadcastAddresses[i]}");
+                            }
+                            catch (Exception ex)
+                            {
+                                AppendLog($"UDP sändfel: {ex.Message}");
+                            }
+                        }
 
                         nextSend = DateTime.UtcNow.AddMilliseconds(
                             sendIntervalMilliseconds);
                     }
 
-                    // Vänta på svar eller fortsätt efter 100 ms
-                    await Task.WhenAny(receiveTask.AsTask(), Task.Delay(100));
+                    // Vänta på svar från något av nätverkskorten
+                    await Task.WhenAny(
+                        receiveTasks.Cast<Task>().Append(Task.Delay(100)));
 
-                    if (!receiveTask.IsCompleted)
-                        continue;
-
-                    UdpReceiveResult response;
-
-                    try
+                    // Hantera alla mottagna svar
+                    for (int i = 0; i < receiveTasks.Count; i++)
                     {
-                        response = await receiveTask;
+                        if (!receiveTasks[i].IsCompleted)
+                            continue;
+
+                        UdpReceiveResult response;
+
+                        try
+                        {
+                            response = await receiveTasks[i];
+
+                            // Starta nästa mottagning på samma nätverkskort
+                            receiveTasks[i] = udpClients[i].ReceiveAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog($"UDP mottagningsfel: {ex.Message}");
+                            continue;
+                        }
+
+                        string message = Encoding.UTF8
+                            .GetString(response.Buffer)
+                            .Trim();
+
+                        string[] fields = message.Split(';');
+
+                        AppendLog(
+                            $"UDP RX från {response.RemoteEndPoint}: {message}");
+
+                        if (fields.Length < 7 ||
+                            !string.Equals(fields[0], "SMARTGATE",
+                                StringComparison.OrdinalIgnoreCase) ||
+                            fields[1] != "1")
+                            continue;
+
+                        if (!int.TryParse(fields[2], out int gateId) ||
+                            !int.TryParse(fields[3], out int siteId) ||
+                            !int.TryParse(fields[5], out int tcpPort) ||
+                            tcpPort < 1 || tcpPort > 65535)
+                            continue;
+
+                        string ipAddress = fields[4];
+
+                        if (!IPAddress.TryParse(ipAddress, out _))
+                            ipAddress = response.RemoteEndPoint.Address.ToString();
+
+                        if (_discoveredGates.Any(g =>
+                            g.IpAddress == ipAddress &&
+                            g.TcpPort == tcpPort))
+                            continue;
+
+                        _discoveredGates.Add(new DiscoveredSmartGate
+                        {
+                            GateId = gateId,
+                            SiteId = siteId,
+                            IpAddress = ipAddress,
+                            TcpPort = tcpPort,
+                            FirmwareVersion = fields[6]
+                        });
+
+                        lastDeviceFound = DateTime.UtcNow;
+
+                        AppendLog(
+                            $"Hittade SmartGate {gateId} på {ipAddress}.");
                     }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-
-                    // Starta mottagning av nästa paket
-                    receiveTask = udp.ReceiveAsync(timeout.Token);
-
-                    string message =
-                        Encoding.UTF8.GetString(response.Buffer).Trim();
-
-                    string[] fields = message.Split(';');
-
-                    AppendLog(
-                        $"UDP RX från {response.RemoteEndPoint}: {message}");
-
-                    if (fields.Length < 7 ||
-                        !string.Equals(
-                            fields[0],
-                            "SMARTGATE",
-                            StringComparison.OrdinalIgnoreCase) ||
-                        fields[1] != "1")
-                    {
-                        continue;
-                    }
-
-                    if (!int.TryParse(fields[2], out int gateId) ||
-                        !int.TryParse(fields[3], out int siteId) ||
-                        !int.TryParse(fields[5], out int tcpPort) ||
-                        tcpPort < 1 || tcpPort > 65535)
-                    {
-                        continue;
-                    }
-
-                    string ipAddress = fields[4];
-
-                    if (!IPAddress.TryParse(ipAddress, out _))
-                        ipAddress = response.RemoteEndPoint.Address.ToString();
-
-                    // Undvik dubbletter
-                    if (_discoveredGates.Any(g =>
-                        g.IpAddress == ipAddress &&
-                        g.TcpPort == tcpPort))
-                    {
-                        continue;
-                    }
-
-                    _discoveredGates.Add(new DiscoveredSmartGate
-                    {
-                        GateId = gateId,
-                        SiteId = siteId,
-                        IpAddress = ipAddress,
-                        TcpPort = tcpPort,
-                        FirmwareVersion = fields[6]
-                    });
-
-                    lastDeviceFound = DateTime.UtcNow;
-
-                    AppendLog($"Hittade SmartGate {gateId} på {ipAddress}.");
                 }
 
-                // Avbryt eventuell väntande mottagning
                 timeout.Cancel();
 
                 DiscoveryStatusText.Text = _discoveredGates.Count == 0
@@ -429,40 +493,49 @@ namespace smartgate_wpf_adm
             }
             finally
             {
+                foreach (var udp in udpClients)
+                    udp.Dispose();
+
                 _isSearchingForGates = false;
                 UpdateConnectionButtons();
             }
         }
 
 
-        private static IPAddress GetBroadcastAddress()
+        private static List<(IPAddress LocalIP, IPAddress Broadcast)> GetBroadcastAddresses()
         {
-            var wifi = NetworkInterface.GetAllNetworkInterfaces()
-                .FirstOrDefault(ni =>
-                    ni.OperationalStatus == OperationalStatus.Up &&
-                    ni.NetworkInterfaceType == NetworkInterfaceType.Wireless80211);
+            var result = new List<(IPAddress, IPAddress)>();
 
-            if (wifi == null)
-                throw new InvalidOperationException("Hittade inget aktivt WiFi-nätverkskort.");
-
-            foreach (var address in wifi.GetIPProperties().UnicastAddresses)
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
             {
-                if (address.Address.AddressFamily != AddressFamily.InterNetwork)
+                if (ni.OperationalStatus != OperationalStatus.Up)
                     continue;
 
-                byte[] ip = address.Address.GetAddressBytes();
-                byte[] mask = address.IPv4Mask.GetAddressBytes();
-                byte[] broadcast = new byte[4];
+                if (ni.NetworkInterfaceType != NetworkInterfaceType.Ethernet &&
+                    ni.NetworkInterfaceType != NetworkInterfaceType.Wireless80211)
+                    continue;
 
-                for (int i = 0; i < 4; i++)
-                    broadcast[i] = (byte)(ip[i] | ~mask[i]);
+                foreach (var address in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (address.Address.AddressFamily != AddressFamily.InterNetwork ||
+                        address.IPv4Mask == null)
+                        continue;
 
-                return new IPAddress(broadcast);
+                    byte[] ip = address.Address.GetAddressBytes();
+                    byte[] mask = address.IPv4Mask.GetAddressBytes();
+                    byte[] broadcast = new byte[4];
+
+                    for (int i = 0; i < 4; i++)
+                        broadcast[i] = (byte)(ip[i] | ~mask[i]);
+
+                    result.Add((address.Address, new IPAddress(broadcast)));
+                }
             }
 
-            throw new InvalidOperationException("WiFi saknar IPv4-adress.");
+            return result;
         }
-        private  void LogNetworkInterfaces()
+
+        private void LogNetworkInterfaces()
         {
             foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
             {
@@ -487,8 +560,6 @@ namespace smartgate_wpf_adm
                 }
             }
         }
-
-
 
         private void DiscoveredGatesGrid_MouseDoubleClick(
             object sender,
